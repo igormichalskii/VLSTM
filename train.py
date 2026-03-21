@@ -4,21 +4,24 @@ import torch
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 import optuna
-from lstm_model import VLSTM
+from lstm_model import QuantileLSTM
 
 torch.manual_seed(42)
 np.random.seed(42)
 
-class AsymmetricVolatilityLoss(nn.Module):
-    def __init__(self, penalty_factor=3.0):
-        super().__init__()
-        self.penalty_factor = penalty_factor
+class PinballLoss(nn.Module):
+    def __init__(self, quantiles=[0.1, 0.5, 0.9]):
+        super(PinballLoss, self).__init__()
+        self.quantiles = quantiles
 
-    def forward(self, y_pred, y_true):
-        error = y_pred - y_true
-        squared_error = error ** 2
-        multiplier = torch.where(error < 0, self.penalty_factor, 1.0)
-        return torch.mean(squared_error * multiplier)
+    def forward(self, preds, target):
+        # preds shape: (Batch, 3) -> The three risk bands
+        # target shape: (Batch, 1) -> The actual real-world volatility
+        loss = 0.0
+        for i, q in enumerate(self.quantiles):
+            error = target - preds[:, i:i+1]
+            loss += torch.max(q * error, (q-1) * error).mean()
+        return loss
 
 def create_sequences(data, seq_length):
     xs, ys = [], []
@@ -45,10 +48,7 @@ def run_optimized_pipeline(
     features = [
         'log_return',
         'realized_vol',
-        'vix_close',
-        'volume_surge',
-        'bb_width',
-        'macd_hist'
+        'vix_close'
     ]
     train_scaled = scaler.fit_transform(optuna_train_df[features])
     
@@ -65,14 +65,14 @@ def run_optimized_pipeline(
         dropout = trial.suggest_float('dropout', 0.15, 0.35)
         lr = trial.suggest_float('lr', 0.001, 0.008)
         
-        model = VLSTM(
-            input_size=6, 
+        model = QuantileLSTM(
+            input_size=3, 
             hidden_size=hidden_size, 
             num_layers=num_layers, 
             dropout=dropout
         )
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        criterion = AsymmetricVolatilityLoss(penalty_factor=3.0)
+        criterion = PinballLoss(quantiles=[0.1, 0.5, 0.9])
         
         for _ in range(40): 
             model.train()
@@ -118,14 +118,14 @@ def run_optimized_pipeline(
         f_X_test_t = torch.tensor(f_X_test, dtype=torch.float32)
         
         torch.manual_seed(42)
-        fold_model = VLSTM(
-            input_size=6, 
+        fold_model = QuantileLSTM(
+            input_size=3, 
             hidden_size=best['hidden_size'], 
             num_layers=best['num_layers'], 
             dropout=best['dropout']
         )
         fold_optimizer = torch.optim.Adam(fold_model.parameters(), lr=best['lr'])
-        criterion = AsymmetricVolatilityLoss(penalty_factor=3.0)
+        criterion = PinballLoss(quantiles=[0.1, 0.5, 0.9])
         
         for epoch in range(50):
             fold_model.train()
@@ -137,10 +137,20 @@ def run_optimized_pipeline(
         fold_model.eval()
         with torch.no_grad():
             preds_scaled = fold_model(f_X_test_t).numpy()
-            
-        dummy = np.zeros((len(preds_scaled), 6))
-        dummy[:, 1] = preds_scaled[:, 0]
-        preds_descaled = fold_scaler.inverse_transform(dummy)[:, 1]
+
+        dummy_10 = np.zeros((len(preds_scaled), 3))
+        dummy_50 = np.zeros((len(preds_scaled), 3))
+        dummy_90 = np.zeros((len(preds_scaled), 3))
+
+        dummy_10[:, 1] = preds_scaled[:, 0] # 10th
+        dummy_50[:, 1] = preds_scaled[:, 1] # 50th
+        dummy_90[:, 1] = preds_scaled[:, 2] # 90th
+
+        p10 = fold_scaler.inverse_transform(dummy_10)[:, 1]
+        p50 = fold_scaler.inverse_transform(dummy_50)[:, 1]
+        p90 = fold_scaler.inverse_transform(dummy_90)[:, 1]
+
+        preds_descaled = np.column_stack((p10, p50, p90))
         all_descaled_preds.extend(preds_descaled)
 
     final_wf_predictions = np.array(all_descaled_preds)
