@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class VLSTM(nn.Module):
-    def __init__(self, input_size=3, hidden_size=64, num_layers=2, dropout=0.2):
+    def __init__(self, input_size=6, hidden_size=64, num_layers=2, dropout=0.2):
         super(VLSTM, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers

@@ -27,7 +27,11 @@ def create_sequences(data, seq_length):
         ys.append(data[i + seq_length, 1])
     return np.array(xs), np.array(ys)
 
-def run_optimized_pipeline(file_path="SPY_VIX_daily_clean.parquet", n_trials=10, n_splits=4):
+def run_optimized_pipeline(
+        file_path="SPY_VIX_daily_clean.parquet", 
+        n_trials=10, 
+        n_splits=4
+    ):
     df = pd.read_parquet(file_path)
     seq_length = 21
     
@@ -37,7 +41,15 @@ def run_optimized_pipeline(file_path="SPY_VIX_daily_clean.parquet", n_trials=10,
 
     print("1. Prepping Tensor Data for Optuna...")
     scaler = StandardScaler()
-    features = ['log_return', 'realized_vol', 'vix_close']
+    # THE UPGRADE: 6 Features instead of 3
+    features = [
+        'log_return',
+        'realized_vol',
+        'vix_close',
+        'volume_surge',
+        'bb_width',
+        'macd_hist'
+    ]
     train_scaled = scaler.fit_transform(optuna_train_df[features])
     
     X_train, y_train = create_sequences(train_scaled, seq_length)
@@ -53,7 +65,12 @@ def run_optimized_pipeline(file_path="SPY_VIX_daily_clean.parquet", n_trials=10,
         dropout = trial.suggest_float('dropout', 0.15, 0.35)
         lr = trial.suggest_float('lr', 0.001, 0.008)
         
-        model = VLSTM(input_size=3, hidden_size=hidden_size, num_layers=num_layers, dropout=dropout)
+        model = VLSTM(
+            input_size=6, 
+            hidden_size=hidden_size, 
+            num_layers=num_layers, 
+            dropout=dropout
+        )
         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         criterion = AsymmetricVolatilityLoss(penalty_factor=3.0)
         
@@ -65,7 +82,10 @@ def run_optimized_pipeline(file_path="SPY_VIX_daily_clean.parquet", n_trials=10,
             optimizer.step()
         return loss.item()
 
-    study = optuna.create_study(direction='minimize', sampler=optuna.samplers.TPESampler(seed=42))
+    study = optuna.create_study(
+        direction='minimize', 
+        sampler=optuna.samplers.TPESampler(seed=42)
+    )
     study.optimize(objective, n_trials=n_trials)
     best = study.best_params
     print(f"--> Architecture Locked: {best}")
@@ -98,7 +118,12 @@ def run_optimized_pipeline(file_path="SPY_VIX_daily_clean.parquet", n_trials=10,
         f_X_test_t = torch.tensor(f_X_test, dtype=torch.float32)
         
         torch.manual_seed(42)
-        fold_model = VLSTM(input_size=3, hidden_size=best['hidden_size'], num_layers=best['num_layers'], dropout=best['dropout'])
+        fold_model = VLSTM(
+            input_size=6, 
+            hidden_size=best['hidden_size'], 
+            num_layers=best['num_layers'], 
+            dropout=best['dropout']
+        )
         fold_optimizer = torch.optim.Adam(fold_model.parameters(), lr=best['lr'])
         criterion = AsymmetricVolatilityLoss(penalty_factor=3.0)
         
@@ -113,7 +138,7 @@ def run_optimized_pipeline(file_path="SPY_VIX_daily_clean.parquet", n_trials=10,
         with torch.no_grad():
             preds_scaled = fold_model(f_X_test_t).numpy()
             
-        dummy = np.zeros((len(preds_scaled), 3))
+        dummy = np.zeros((len(preds_scaled), 6))
         dummy[:, 1] = preds_scaled[:, 0]
         preds_descaled = fold_scaler.inverse_transform(dummy)[:, 1]
         all_descaled_preds.extend(preds_descaled)
