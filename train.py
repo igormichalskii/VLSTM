@@ -154,4 +154,4 @@ def run_optimized_pipeline(
         all_descaled_preds.extend(preds_descaled)
 
     final_wf_predictions = np.array(all_descaled_preds)
-    return test_df, final_wf_predictions, best
+    return test_df, final_wf_predictions, best, fold_model, fold_scaler, features
