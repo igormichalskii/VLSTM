@@ -24,7 +24,8 @@ We achieved a **Best RMSE of 0.0120** during the walk-forward evaluation. It is 
 
 You need PyTorch, Optuna, and a machine with decent compute. 
 
-1.  **Install Dependencies:** ```bash
+1.  **Install Dependencies:** 
+    ```bash
     pip install -r requirements.txt
     ```
 2.  **Pull the Data:**
